@@ -163,7 +163,7 @@ export default class ChatRoom extends Listenable {
         // We need to broadcast 'videomuted' status from the beginning, cause
         // Jicofo makes decisions based on that. Initialize it with 'false'
         // here.
-        this.addVideoInfoToPresence(false);
+        this.addVideoInfoToPresence('initial', false); // FIXME: sending first video muted info without a stream id might be a problem.
 
         if (options.deploymentInfo && options.deploymentInfo.userRegion) {
             this.presMap.nodes.push({
@@ -1368,6 +1368,53 @@ export default class ChatRoom extends Listenable {
         this.presenceUpdateTime = Date.now();
     }
 
+    // I could not use this method due to the xmpp-extensions restriction.
+    /**
+     * Adds the key to the presence map, without removing any previous value.
+     * @param key
+     * @param values
+     */
+     addToPresence2(key, values) {
+        values.tagName = key;
+        this.presMap.nodes.push(values);
+        this.presenceUpdateTime = Date.now();
+    }
+
+    /**
+     * Adds the key to the presence map, overriding any previous value.
+     * @param key
+     * @param values
+     */
+     addOrReplaceToPresence(key, values) {
+        values.tagName = key;
+
+        /*
+            values: 
+            {
+                attributes: { 'xmlns': 'http://jitsi.org/jitmeet/video' },
+                value: streamId + ":" + mute.toString()
+            }
+
+        */
+       
+        if (values.value.includes(":")) {
+            const exactValue = values.value.split(":")[0];
+
+            const nodes = this.presMap.nodes.filter(node => {
+
+                const result = node.tagName !== key || (node.value && !node.value.includes("initial") && !node.value.includes(exactValue));
+
+                return result;
+            });
+
+            this.presMap.nodes = nodes;
+            this.presenceUpdateTime = Date.now();
+        }
+        
+        this.presMap.nodes.push(values);
+        this.presenceUpdateTime = Date.now();
+    }
+
     /**
      * Retrieves a value from the presence map.
      *
@@ -1467,11 +1514,13 @@ export default class ChatRoom extends Listenable {
 
     /**
      *
+     * @param streamId
      * @param mute
      * @param callback
      */
-    setVideoMute(mute, callback) {
-        this.sendVideoInfoPresence(mute);
+    setVideoMute(streamId, mute, callback) {
+        this.sendVideoInfoPresence(streamId, mute);
+
         if (callback) {
             callback(mute);
         }
@@ -1516,9 +1565,11 @@ export default class ChatRoom extends Listenable {
 
     /**
      *
+     * @param streamId we make mute action by stream id.
+     * 
      * @param mute
      */
-    addVideoInfoToPresence(mute) {
+    addVideoInfoToPresence(streamId, mute) {
         this.addToPresence(
             'videomuted',
             {
@@ -1531,8 +1582,8 @@ export default class ChatRoom extends Listenable {
      *
      * @param mute
      */
-    sendVideoInfoPresence(mute) {
-        this.addVideoInfoToPresence(mute);
+    sendVideoInfoPresence(streamId, mute) {
+        this.addVideoInfoToPresence(streamId, mute);
         this.sendPresence();
     }
 
@@ -1543,11 +1594,13 @@ export default class ChatRoom extends Listenable {
      * which corresponds to MUC nickname.
      * @param {MediaType} mediaType the type of the media for which presence
      * info will be obtained.
+     * @param {string} mediaStreamId the endpoint ID mapped to the participant
+     * which corresponds to MUC nickname.
      * @return {PeerMediaInfo} presenceInfo an object with media presence
      * info or <tt>null</tt> either if there is no presence available or if
      * the media type given is invalid.
      */
-    getMediaPresenceInfo(endpointId, mediaType) {
+    getMediaPresenceInfo(endpointId, mediaType, mediaStreamId) {
         // Will figure out current muted status by looking up owner's presence
         const pres = this.lastPresences[`${this.roomjid}/${endpointId}`];
 
@@ -1559,25 +1612,41 @@ export default class ChatRoom extends Listenable {
             muted: false, // unmuted by default
             videoType: undefined // no video type by default
         };
-        let mutedNode = null;
 
         if (mediaType === MediaType.AUDIO) {
-            mutedNode = filterNodeFromPresenceJSON(pres, 'audiomuted');
+            let audioMutedNode = filterNodeFromPresenceJSON(pres, 'audiomuted');
+            data.muted = audioMutedNode.length > 0 && audioMutedNode[0].value === 'true';
         } else if (mediaType === MediaType.VIDEO) {
-            mutedNode = filterNodeFromPresenceJSON(pres, 'videomuted');
-            const videoTypeNode = filterNodeFromPresenceJSON(pres, 'videoType');
+            const videoMutedNodes = filterNodeFromPresenceJSON(pres, 'videomuted');
 
-            if (videoTypeNode.length > 0) {
-                data.videoType = videoTypeNode[0].value;
+            data.muted = videoMutedNodes.length > 0 && videoMutedNodes[0].value === 'true';
+
+            const videoTypeNodes = filterNodeFromPresenceJSON(pres, 'videoType');
+
+            for (let videoTypeNode of videoTypeNodes) {
+
+                const videoTypeValue = videoTypeNode.value;
+
+                if (videoTypeValue.includes(":")) {
+
+                    // ie:
+                    // videoTypeValue : 541164fc-87de-42a1-a037-e34c3c2f6df0:camera
+                    // mediaStreamId: 541164fc-87de-42a1-a037-e34c3c2f6df0-2
+                    if (mediaStreamId.includes(videoTypeValue.split(":")[0])) { // new presense info type
+                        // extracting the value
+                        data.videoType = videoTypeValue.split(":")[1] === 'undefined' ? 'camera' : videoTypeValue.split(":")[1];
+                    }
+                } else if (videoTypeValue === 'camera' || videoTypeValue === 'desktop') {
+                    data.videoType = videoTypeValue; // obsolete version may come from mobile app etc.
+                } else {
+                    logger.error(`Beklenmeyen videoType değeri: ${videoTypeNode}`);
+                }
             }
         } else {
             logger.error(`Unsupported media type: ${mediaType}`);
 
             return null;
         }
-
-        data.muted = mutedNode.length > 0 && mutedNode[0].value === 'true';
-
         return data;
     }
 

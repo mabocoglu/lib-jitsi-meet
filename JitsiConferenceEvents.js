@@ -209,6 +209,12 @@ export const PARTCIPANT_FEATURES_CHANGED
     = 'conference.partcipant_features_changed';
 
 /**
+ * Indicates that participant stopped the screenshare
+ */
+export const PARTICIPANT_STOPPED_SCREEN_SHARE
+    = 'conference.partcipant_stopped_screen_share';
+
+/**
  * Indicates that a the value of a specific property of a specific participant
  * has changed.
  */
@@ -330,6 +336,11 @@ export const USER_JOINED = 'conference.userJoined';
  * A user has left the conference.
  */
 export const USER_LEFT = 'conference.userLeft';
+
+/**
+ * Usert stop the screenshare. I don't remember why did not I use PARTICIPANT_STOPPED_SCREEN_SHARE?
+ */
+export const USER_STOPPED_SCREEN_SHARING = 'conference.userStoppedScreenSharing';
 
 /**
  * User role changed.

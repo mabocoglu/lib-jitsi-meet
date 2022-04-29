@@ -22,6 +22,7 @@ import LocalSdpMunger from './LocalSdpMunger';
 import RTC from './RTC';
 import RTCUtils from './RTCUtils';
 import { SIM_LAYER_RIDS, TPCUtils } from './TPCUtils';
+import OptionalKeyMap from '../util/OptionalKeyMap';
 
 // FIXME SDP tools should end up in some kind of util module
 
@@ -144,12 +145,20 @@ export default function TraceablePeerConnection(
      */
     this.isP2P = isP2P;
 
-    // FIXME: We should support multiple streams per jid.
+     // FIXME: We should support multiple streams per jid.
     /**
      * The map holds remote tracks associated with this peer connection.
      * It maps user's JID to media type and remote track
      * (one track per media type per user's JID).
      * @type {Map<string, Map<MediaType, JitsiRemoteTrack>>}
+     */
+
+    // FIXME: We should support multiple streams per jid.
+    /**
+     * The map holds remote tracks associated with this peer connection.
+     * It maps user's JID to media type and remote track
+     * (one track per media type per user's JID).
+     * @type {Map<string, OptionalKeyMap<MediaType, VideoType, JitsiRemoteTrack>>}
      */
     this.remoteTracks = new Map();
 
@@ -258,7 +267,7 @@ export default function TraceablePeerConnection(
     this.maxstats = options.maxstats;
 
     this.interop = new Interop();
-    const Simulcast = require('@jitsi/sdp-simulcast');
+    const Simulcast = require('sdp-simulcast');
 
     this.simulcast = new Simulcast(
         {
@@ -532,6 +541,7 @@ TraceablePeerConnection.prototype._peerVideoTypeChanged = function(
 
         return;
     }
+    // TODO: We should get the previous videoType
     const videoTrack = this.getRemoteTracks(endpointId, MediaType.VIDEO);
 
     if (videoTrack.length) {
@@ -557,12 +567,15 @@ TraceablePeerConnection.prototype._peerMutedChanged = function(
 
         return;
     }
-    const track = this.getRemoteTracks(endpointId, mediaType);
+    const tracks = this.getRemoteTracks(endpointId, mediaType, mediaType === 'video' ? 'camera' : undefined);
 
-    if (track.length) {
-        // NOTE 1 track per media type is assumed
-        track[0].setMute(isMuted);
+    for (const track of tracks) {
+        if (track.getType() === 'audio' || track.videoType !== 'desktop') { // we do not mute the desktop track.
+            // NOTE 1 track per media type is assumed
+            track.setMute(isMuted);
+        }
     }
+
 };
 
 /**
@@ -618,6 +631,31 @@ TraceablePeerConnection.prototype.getLocalVideoTrack = function() {
 };
 
 /**
+ * Obtains local tracks for given {@link MediaType}. If the <tt>mediaType</tt>
+ * argument is omitted the list of all local tracks will be returned.
+ * @param {MediaType} [mediaType]
+ * @return {Array<JitsiLocalTrack>}
+ */
+TraceablePeerConnection.prototype.getLocalTracks2 = function(mediaType, videoType) {
+    let tracks = Array.from(this.localTracks.values());
+
+    if (mediaType !== undefined) {
+        tracks = tracks.filter(track => track.getType() === mediaType && (!videoType || videoType === track.videoType));
+    }
+
+    return tracks;
+};
+
+/**
+ * Retrieves the local camera video track.
+ *
+ * @returns {JitsiLocalTrack|undefined} - local video track.
+ */
+TraceablePeerConnection.prototype.getLocalVideoTrack2 = function() {
+    return this.getLocalTracks(MediaType.VIDEO, VideoType.CAMERA)[0];
+};
+
+/**
  * Checks whether or not this {@link TraceablePeerConnection} instance contains
  * any local tracks for given <tt>mediaType</tt>.
  * @param {MediaType} mediaType
@@ -640,7 +678,8 @@ TraceablePeerConnection.prototype.hasAnyTracksOfType = function(mediaType) {
  */
 TraceablePeerConnection.prototype.getRemoteTracks = function(
         endpointId,
-        mediaType) {
+        mediaType,
+        videoType) {
     const remoteTracks = [];
     const endpoints
         = endpointId ? [ endpointId ] : this.remoteTracks.keys();
@@ -654,13 +693,14 @@ TraceablePeerConnection.prototype.getRemoteTracks = function(
             // eslint-disable-next-line no-continue
             continue;
         }
-
+        
         for (const trackMediaType of endpointTrackMap.keys()) {
             // per media type filtering
-            if (!mediaType || mediaType === trackMediaType) {
-                const mediaTrack = endpointTrackMap.get(trackMediaType);
+            if (!mediaType || mediaType === trackMediaType || trackMediaType.startsWith(mediaType + "_|seperator_||")) { // TODO: OptionalKeyMap.keySeperator constant value can be used.
 
-                if (mediaTrack) {
+                const mediaTrack = endpointTrackMap.get(trackMediaType); //we get the specifix media track. do not need to use getAll method.
+
+                if (mediaTrack && (!videoType || videoType === mediaTrack.videoType)) {
                     remoteTracks.push(mediaTrack);
                 }
             }
@@ -842,7 +882,7 @@ TraceablePeerConnection.prototype._remoteTrackAdded = function(stream, track, tr
     // with global error handler anyway
     const ssrcStr = ssrcLines[0].substring(7).split(' ')[0];
     const trackSsrc = Number(ssrcStr);
-    const ownerEndpointId = this.signalingLayer.getSSRCOwner(trackSsrc);
+    const ownerEndpointId = this.signalingLayer.getSSRCOwner(trackSsrc); // TODO: Check the ssrcs for both desktop and camera tracks.
 
     if (isNaN(trackSsrc) || trackSsrc < 0) {
         GlobalOnErrorHandler.callErrorHandler(
@@ -866,7 +906,7 @@ TraceablePeerConnection.prototype._remoteTrackAdded = function(stream, track, tr
     logger.log(`${this} associated ssrc`, ownerEndpointId, trackSsrc);
 
     const peerMediaInfo
-        = this.signalingLayer.getPeerMediaInfo(ownerEndpointId, mediaType);
+        = this.signalingLayer.getPeerMediaInfo(ownerEndpointId, mediaType, streamId);
 
     if (!peerMediaInfo) {
         GlobalOnErrorHandler.callErrorHandler(
@@ -877,9 +917,9 @@ TraceablePeerConnection.prototype._remoteTrackAdded = function(stream, track, tr
         return;
     }
 
-    const muted = peerMediaInfo.muted;
     const videoType = peerMediaInfo.videoType; // can be undefined
-
+    const muted = videoType && videoType === 'desktop' ? false : peerMediaInfo.muted;
+    
     this._createRemoteTrack(
         ownerEndpointId, stream, track, mediaType, videoType, trackSsrc, muted);
 };
@@ -899,56 +939,78 @@ TraceablePeerConnection.prototype._remoteTrackAdded = function(stream, track, tr
  * @param {number} ssrc the track's main SSRC number
  * @param {boolean} muted the initial muted status
  */
-TraceablePeerConnection.prototype._createRemoteTrack = function(
-        ownerEndpointId,
-        stream,
-        track,
-        mediaType,
-        videoType,
-        ssrc,
-        muted) {
+TraceablePeerConnection.prototype._createRemoteTrack = function (
+    ownerEndpointId,
+    stream,
+    track,
+    mediaType,
+    videoType,
+    ssrc,
+    muted) {
     let remoteTracksMap = this.remoteTracks.get(ownerEndpointId);
 
+    // mabocoglu: Mobil uygulamalarda değişiklik yapmadığımız için şimdilik undefined gelen videoType'ına camera olarak tanımlıyoruz.
+    // while we did not make any changes, we consider undefined value as camera for videoType parameter
+    const exactVideoType = mediaType === 'video' && !videoType ? 'camera' : videoType;
+
     if (!remoteTracksMap) {
-        remoteTracksMap = new Map();
+        remoteTracksMap = new OptionalKeyMap();
         this.remoteTracks.set(ownerEndpointId, remoteTracksMap);
     }
 
-    const existingTrack = remoteTracksMap.get(mediaType);
+    const existingTracks = remoteTracksMap.getWithOptionalKey(mediaType, exactVideoType);
 
-    // Delete the existing track and create the new one because of a known bug on Safari.
-    // RTCPeerConnection.ontrack fires when a new remote track is added but MediaStream.onremovetrack doesn't so
-    // it needs to be removed whenever a new track is received for the same endpoint id.
-    if (existingTrack && browser.isSafari()) {
-        this._remoteTrackRemoved(existingTrack.getOriginalStream(), existingTrack.getTrack());
-    }
+    for (let existingTrack of existingTracks) {
 
-    if (existingTrack && existingTrack.getTrack() === track) {
-        // Ignore duplicated event which can originate either from
-        // 'onStreamAdded' or 'onTrackAdded'.
-        logger.info(
-            `${this} ignored duplicated remote track added event for: `
+        // Delete the existing track and create the new one because of a known bug on Safari.
+        // RTCPeerConnection.ontrack fires when a new remote track is added but MediaStream.onremovetrack doesn't so
+        // it needs to be removed whenever a new track is received for the same endpoint id.
+        if (existingTrack && browser.isSafari()) {
+            this._remoteTrackRemoved(existingTrack.getOriginalStream(), existingTrack.getTrack());
+        }
+
+        if (existingTrack && existingTrack.getTrack() === track) {
+            // Ignore duplicated event which can originate either from 'onStreamAdded' or 'onTrackAdded'.
+            logger.info(
+                `${this} ignored duplicated remote track added event for: `
                 + `${ownerEndpointId}, ${mediaType}`);
 
-        return;
-    } else if (existingTrack) {
-        logger.error(`${this} overwriting remote track for ${ownerEndpointId} ${mediaType}`);
+            return;
+        } else if (existingTrack) {
+            logger.error(`${this} received a second remote track for ${ownerEndpointId} ${mediaType}, `
+            + 'deleting the existing track.');
+
+            // The exisiting track needs to be removed here. We can get here when Jicofo reverses the order of source-add
+            // and source-remove messages. Ideally, when a remote endpoint changes source, like switching devices, it sends
+            // a source-remove (for old ssrc) followed by a source-add (for new ssrc) and Jicofo then should forward these
+            // two messages to all the other endpoints in the conference in the same order. However, sometimes, these
+            // messages arrive at the client in the reverse order resulting in two remote tracks (of same media type) being
+            // created and in case of video, a black strip (that of the first track which has ended) appears over the live
+            // track obscuring it. Removing the existing track when that happens will fix this issue.
+            this._remoteTrackRemoved(existingTrack.getOriginalStream(), existingTrack.getTrack());
+        }
+
+        logger.error(`${this} track for ${ownerEndpointId} ${mediaType} ${exactVideoType}`);
     }
 
     const remoteTrack
         = new JitsiRemoteTrack(
-                this.rtc,
-                this.rtc.conference,
-                ownerEndpointId,
-                stream,
-                track,
-                mediaType,
-                videoType,
-                ssrc,
-                muted,
-                this.isP2P);
+            this.rtc,
+            this.rtc.conference,
+            ownerEndpointId,
+            stream,
+            track,
+            mediaType,
+            exactVideoType,
+            ssrc,
+            muted,
+            this.isP2P);
 
-    remoteTracksMap.set(mediaType, remoteTrack);
+    if (mediaType == MediaType.AUDIO) {
+        remoteTracksMap.set(mediaType, remoteTrack);
+    } else { // there might be two video type
+        remoteTracksMap.setWithOptionalKey(mediaType, exactVideoType, remoteTrack);
+    }
 
     this.eventEmitter.emit(RTCEvents.REMOTE_TRACK_ADDED, remoteTrack, this);
 };
@@ -1044,8 +1106,9 @@ TraceablePeerConnection.prototype._getRemoteTrackById = function(
     for (const endpointTrackMap of this.remoteTracks.values()) {
         for (const mediaTrack of endpointTrackMap.values()) {
             // FIXME verify and try to use ===
+            // FIXME: Uncaught TypeError: Cannot read property 'getStreamId' of undefined
             /* eslint-disable eqeqeq */
-            if (mediaTrack.getStreamId() == streamId
+            if (mediaTrack && mediaTrack.getStreamId() == streamId
                 && mediaTrack.getTrackId() == trackId) {
                 return mediaTrack;
             }
@@ -1069,13 +1132,15 @@ TraceablePeerConnection.prototype.removeRemoteTracks = function(owner) {
     const remoteTracksMap = this.remoteTracks.get(owner);
 
     if (remoteTracksMap) {
-        const removedAudioTrack = remoteTracksMap.get(MediaType.AUDIO);
-        const removedVideoTrack = remoteTracksMap.get(MediaType.VIDEO);
+        const removedAudioTrack = remoteTracksMap.get(MediaType.AUDIO); 
+        const removedVideoTracks = remoteTracksMap.getAll(MediaType.VIDEO);
+        for (let removedVideoTrack of removedVideoTracks) {
 
-        removedAudioTrack && removedTracks.push(removedAudioTrack);
-        removedVideoTrack && removedTracks.push(removedVideoTrack);
+            removedAudioTrack && removedTracks.push(removedAudioTrack);
+            removedVideoTrack && removedTracks.push(removedVideoTrack);
 
-        this.remoteTracks.delete(owner);
+            this.remoteTracks.delete(owner);
+        }
     }
 
     logger.debug(
@@ -1098,7 +1163,7 @@ TraceablePeerConnection.prototype._removeRemoteTrack = function(toBeRemoved) {
     if (!remoteTracksMap) {
         logger.error(
             `removeRemoteTrack: no remote tracks map for ${participantId}`);
-    } else if (!remoteTracksMap.delete(toBeRemoved.getType())) {
+    } else if (!remoteTracksMap.deleteWithOptionalKey(toBeRemoved.getType(), toBeRemoved.videoType)) {
         logger.error(
             `Failed to remove ${toBeRemoved} - type mapping messed up ?`);
     }
@@ -1478,7 +1543,6 @@ const getters = {
                 dumpSDP(desc));
         } else {
             if (browser.doesVideoMuteByStreamRemove()) {
-                desc = this.localSdpMunger.maybeAddMutedLocalVideoTracksToSDP(desc);
                 logger.debug(
                     'getLocalDescription::postTransform (munge local SDP)', desc);
             }
@@ -1585,7 +1649,7 @@ TraceablePeerConnection.prototype.containsTrack = function(track) {
     const participantId = track.getParticipantId();
     const remoteTracksMap = this.remoteTracks.get(participantId);
 
-    return Boolean(remoteTracksMap && remoteTracksMap.get(track.getType()) === track);
+    return Boolean(remoteTracksMap && remoteTracksMap.getAll(track.getType()).includes(track));
 };
 
 /**
@@ -1632,7 +1696,9 @@ TraceablePeerConnection.prototype.addTrack = function(track, isInitiator = false
                 && track.isVideoTrack() && track.isMuted()) {
             const ssrcInfo = this.generateNewStreamSSRCInfo(track);
 
-            this.sdpConsistency.setPrimarySsrc(ssrcInfo.ssrcs[0]);
+            if (track.videoType === 'camera')
+                this.sdpConsistency.setPrimarySsrc(ssrcInfo.ssrcs[0]); // Our primary ssrc should be the camera track!
+            
             const simGroup
                 = ssrcInfo.groups.find(groupInfo => groupInfo.semantics === 'SIM');
 
@@ -1698,6 +1764,26 @@ TraceablePeerConnection.prototype.addTrackUnmute = function(track) {
     this._addStream(webRtcStream);
 
     return Promise.resolve(true);
+};
+
+// TODO: Should be removed. Not used?
+/**
+ * The RTCPeerConnection method addTrack() adds a new media track to the set of tracks which will be transmitted to the other peer.
+ * @param {JitsiLocalTrack} track the track to be added
+ * @private
+ */
+TraceablePeerConnection.prototype._addTrack = function(track) {
+    
+    // logger.info("***### this.peerconnection.addStream metodu çalışıyor... this.peerconnection: ", this.peerconnection);
+    // mabocoglu: Aşağıdaki metodu tetiklediğimizde zaten bir track var diye hata veriyor.
+    // 2021-03-04T13:05:25.962Z [modules/RTC/TraceablePeerConnection.js] <w._addStream>:  ***### this.peerconnection.addStream metodu çalışıyor... this.peerconnection:  ƒ (e){this._shimmedLocalStreams=this._shimmedLocalStreams||{},e.getTracks().forEach(e=>{if(this.getSenders().find(t=>t.track===e))throw new DOMException("Track already exists.","InvalidAccessError")});…
+
+    // Yeni bir stream eklemek karşı tarafta sıkıntıya neden olabilir.
+    this.peerconnection.addTrack(track.track); // track.track MediaStreamTrack türünden değerini veriyor.
+    // this.peerconnection.addStream(mediaStream);
+
+    // logger.info("***### this._addedStreams dizisine ekleniyor... this._addedStreams: ", this._addedStreams);
+    this._addedStreams.push(track.getOriginalStream());
 };
 
 /**
@@ -1869,8 +1955,7 @@ TraceablePeerConnection.prototype.removeTrackMute = function(localTrack) {
     }
 
     if (webRtcStream) {
-        logger.info(
-            `Removing ${localTrack} as mute from ${this}`);
+        logger.info(`Removing ${localTrack} as mute from ${this}`);
         this._removeStream(webRtcStream);
 
         return Promise.resolve(true);
@@ -1981,7 +2066,7 @@ TraceablePeerConnection.prototype._adjustLocalMediaDirection = function(
     return localDescription;
 };
 
-TraceablePeerConnection.prototype.setLocalDescription = function(description) {
+TraceablePeerConnection.prototype.setLocalDescription = function(description, videoType) {
     let localSdp = description;
 
     this.trace('setLocalDescription::preTransform', dumpSDP(localSdp));
@@ -2087,6 +2172,13 @@ TraceablePeerConnection.prototype.setSenderVideoDegradationPreference = function
         }
     }
 
+    /*
+    fix(TPC): do not update encodings for simulcast desktop tracks.
+
+    Fixes jitsi/jitsi-meet#8094.
+    */
+    this.tpcUtils.updateEncodingsResolution(parameters);
+
     return videoSender.setParameters(parameters);
 };
 
@@ -2183,6 +2275,13 @@ TraceablePeerConnection.prototype.setMaxBitRate = function() {
         }
         parameters.encodings[0].maxBitrate = bitrate;
     }
+
+    /*
+    fix(TPC): do not update encodings for simulcast desktop tracks.
+
+    Fixes jitsi/jitsi-meet#8094.
+    */
+    this.tpcUtils.updateEncodingsResolution(parameters);
 
     return videoSender.setParameters(parameters);
 };
@@ -2499,8 +2598,8 @@ TraceablePeerConnection.prototype.close = function() {
     this.peerconnection.close();
 };
 
-TraceablePeerConnection.prototype.createAnswer = function(constraints) {
-    return this._createOfferOrAnswer(false /* answer */, constraints);
+TraceablePeerConnection.prototype.createAnswer = function(constraints, trackId) {
+    return this._createOfferOrAnswer(false /* answer */, constraints, trackId);
 };
 
 TraceablePeerConnection.prototype.createOffer = function(constraints) {
@@ -2515,12 +2614,23 @@ TraceablePeerConnection.prototype.createOffer = function(constraints) {
  */
 function hasCameraTrack(peerConnection) {
     return peerConnection.getLocalTracks()
-        .some(t => t.videoType === 'camera');
+        .some(t => t.videoType === 'camera'); // TODO: we should check if videoType coming from mobile apps is undefined
+}
+
+/**
+ * Checks if a desktop track has been added to the peerconnection
+ * @param {TraceablePeerConnection} peerConnection
+ * @return {boolean} <tt>true</tt> if the peerconnection has
+ * a camera track for its video source <tt>false</tt> otherwise.
+ */
+function hasDesktopTrack(peerConnection) {
+    return peerConnection.getLocalTracks()
+        .some(t => t.videoType === 'desktop');
 }
 
 TraceablePeerConnection.prototype._createOfferOrAnswer = function(
         isOffer,
-        constraints) {
+        constraints, trackId) {
     const logName = isOffer ? 'Offer' : 'Answer';
 
     this.trace(`create${logName}`, JSON.stringify(constraints, null, ' '));
@@ -2529,6 +2639,14 @@ TraceablePeerConnection.prototype._createOfferOrAnswer = function(
         try {
             this.trace(
                 `create${logName}OnSuccess::preTransform`, dumpSDP(resultSdp));
+            
+            const findTrackById = track => track.getTrack().id === trackId;
+            const track = this.getLocalTracks().find(findTrackById);
+
+            // we store desktop msid
+            if (!isOffer && track && track.videoType === 'desktop') {
+                this.sdpConsistency.setDesktopMSID(track.storedMSID);
+            }
 
             if (browser.usesPlanB()) {
                 // If there are no local video tracks, then a "recvonly"
@@ -2538,12 +2656,12 @@ TraceablePeerConnection.prototype._createOfferOrAnswer = function(
                     this.generateRecvonlySsrc();
                 }
 
-                // eslint-disable-next-line no-param-reassign
-                resultSdp = new RTCSessionDescription({
-                    type: resultSdp.type,
-                    sdp: this.sdpConsistency.makeVideoPrimarySsrcsConsistent(
-                        resultSdp.sdp)
-                });
+                    // eslint-disable-next-line no-param-reassign
+                    resultSdp = new RTCSessionDescription({
+                        type: resultSdp.type,
+                        sdp: this.sdpConsistency.makeVideoPrimarySsrcsConsistent(
+                            resultSdp.sdp, track ? track.videoType : undefined)
+                    });
 
                 this.trace(
                     `create${logName}OnSuccess::postTransform `
@@ -2557,8 +2675,8 @@ TraceablePeerConnection.prototype._createOfferOrAnswer = function(
             if (this.isSimulcastOn() && browser.usesSdpMungingForSimulcast()
                 && (!this.options.capScreenshareBitrate
                 || (this.options.capScreenshareBitrate && hasCameraTrack(this)))) {
-                // eslint-disable-next-line no-param-reassign
-                resultSdp = this.simulcast.mungeLocalDescription(resultSdp);
+                    // eslint-disable-next-line no-param-reassign
+                resultSdp = this.simulcast.mungeLocalDescription(resultSdp, track ? this.sdpConsistency.getDesktopMSID(track.storedMSID) : undefined);
                 this.trace(
                     `create${logName}`
                         + 'OnSuccess::postTransform (simulcast)',
@@ -2746,7 +2864,7 @@ TraceablePeerConnection.prototype.generateNewStreamSSRCInfo = function(track) {
     // in config.js is disabled.
     if (this.isSimulcastOn()
         && (!this.options.capScreenshareBitrate
-        || (this.options.capScreenshareBitrate && hasCameraTrack(this)))) {
+        || (this.options.capScreenshareBitrate && hasCameraTrack(this)))) {  
         ssrcInfo = {
             ssrcs: [],
             groups: []

@@ -62,6 +62,28 @@ export default class SdpConsistency {
     }
 
     /**
+     * Masaüstü videosu gelince onu primary yapmamak için kontrol ettiğimiz alan olacak.
+     */
+    setDesktopMSID(msid) {
+        this.cachedDesktopMsid = msid;
+    }
+
+    /**
+     * Masaüstü videosu gelince onu primary yapmamak için kontrol ettiğimiz alan olacak.
+     */
+    getDesktopMSID() {
+        return this.cachedDesktopMsid;
+    }
+
+    /**
+     * Checks whether or not there is a primary video SSRC cached already.
+     * @return {boolean}
+     */
+    hasPrimarySsrcCached() {
+        return Boolean(this.cachedPrimarySsrc);
+    }
+
+    /**
      * Given an sdp string, either:
      *  1) record the primary video and primary rtx ssrcs to be
      *   used in future calls to makeVideoPrimarySsrcsConsistent or
@@ -69,10 +91,11 @@ export default class SdpConsistency {
      *   to match the ones previously cached
      * @param {string} sdpStr the sdp string to (potentially)
      *  change to make the video ssrcs consistent
+     * @param {string} videoType
      * @returns {string} a (potentially) modified sdp string
      *  with ssrcs consistent with this class' cache
      */
-    makeVideoPrimarySsrcsConsistent(sdpStr) {
+    makeVideoPrimarySsrcsConsistent(sdpStr, videoType) {
         const sdpTransformer = new SdpTransformWrap(sdpStr);
         const videoMLine = sdpTransformer.selectMedia('video');
 
@@ -99,14 +122,14 @@ export default class SdpConsistency {
                         + 'stream!');
             }
         } else {
-            const newPrimarySsrc = videoMLine.getPrimaryVideoSsrc();
+            const newPrimarySsrc = videoMLine.getPrimaryVideoSsrc(this.cachedDesktopMsid); // desktop ssrc is not primary!
 
             if (!newPrimarySsrc) {
-                logger.info(
-                    `${this.logPrefix} sdp-consistency couldn't`
-                        + ' parse new primary ssrc');
-
-                return sdpStr;
+                    logger.info(
+                        `${this.logPrefix} sdp-consistency couldn't`
+                            + ' parse new primary ssrc');
+    
+                    return sdpStr;
             }
             if (this.cachedPrimarySsrc) {
                 logger.info(
@@ -127,13 +150,32 @@ export default class SdpConsistency {
                     }
                 }
             } else {
-                this.cachedPrimarySsrc = newPrimarySsrc;
-                logger.info(
-                    `${this.logPrefix} sdp-consistency caching primary ssrc`
-                        + `${this.cachedPrimarySsrc}`);
+                if (videoType !== 'desktop') { // desktop ssrc should not be primary
+                    this.cachedPrimarySsrc = newPrimarySsrc;
+                    logger.info(
+                        `${this.logPrefix} sdp-consistency caching primary ssrc`
+                            + `${this.cachedPrimarySsrc}`);
+                }
             }
 
             this.injectRecvOnly = true;
+        }
+
+        return sdpTransformer.toRawSDP();
+    }
+
+    // TODO: we do not use this method. we may delete it?
+    makeVideoTypeSsrcsConsistent(sdpStr, msId, ssrcNum, videoType) {
+        const sdpTransformer = new SdpTransformWrap(sdpStr);
+
+        const videoMLine = sdpTransformer.selectMediaByMsId('video', msId);
+
+        if (videoMLine) {
+            videoMLine.addSSRCAttribute({
+                id: ssrcNum,
+                attribute: 'videotype',
+                value: videoType
+            });
         }
 
         return sdpTransformer.toRawSDP();

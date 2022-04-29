@@ -1047,8 +1047,12 @@ export default class JingleSessionPC extends JingleSession {
     setOfferAnswerCycle(jingleOfferAnswerIq, success, failure, localTracks = []) {
         const workFunction = finishedCallback => {
             const addTracks = [];
+            let videoTrackId;
 
             for (const track of localTracks) {
+                if (track.type === 'video') // for the first time.
+                    videoTrackId = track.getTrack().id;
+
                 addTracks.push(this.peerconnection.addTrack(track, this.isInitiator));
             }
 
@@ -1068,7 +1072,7 @@ export default class JingleSessionPC extends JingleSession {
             }
 
             Promise.all(addTracks)
-                .then(() => this._renegotiate(newRemoteSdp.raw))
+                .then(() => this._renegotiate(newRemoteSdp.raw, videoTrackId))
                 .then(() => {
                     if (this.state === JingleSessionState.PENDING) {
                         this.state = JingleSessionState.ACTIVE;
@@ -1778,11 +1782,13 @@ export default class JingleSessionPC extends JingleSession {
      * @param {string} [optionalRemoteSdp] optional, raw remote sdp
      *  to use.  If not provided, the remote sdp from the
      *  peerconnection will be used
+     * @param {string} trackId
      * @returns {Promise} promise which resolves when the
      *  o/a flow is complete with no arguments or
      *  rejects with an error {string}
      */
-    _renegotiate(optionalRemoteSdp) {
+    _renegotiate(optionalRemoteSdp, trackId) {
+
         if (this.peerconnection.signalingState === 'closed') {
             const error = new Error('Attempted to renegotiate in state closed');
 
@@ -1811,23 +1817,24 @@ export default class JingleSessionPC extends JingleSession {
             return this._initiatorRenegotiate(remoteDescription);
         }
 
-        return this._responderRenegotiate(remoteDescription);
+        return this._responderRenegotiate(remoteDescription, trackId);
     }
 
     /**
      * Renegotiate cycle implementation for the responder case.
      * @param {object} remoteDescription the SDP object as defined by the WebRTC
      * which will be used as remote description in the cycle.
+     * @param {string} trackId
      * @private
      */
-    _responderRenegotiate(remoteDescription) {
+    _responderRenegotiate(remoteDescription, trackId) {
         logger.debug('Renegotiate: setting remote description');
 
         return this.peerconnection.setRemoteDescription(remoteDescription)
             .then(() => {
                 logger.debug('Renegotiate: creating answer');
 
-                return this.peerconnection.createAnswer(this.mediaConstraints)
+                return this.peerconnection.createAnswer(this.mediaConstraints, trackId)
                     .then(answer => {
                         logger.debug('Renegotiate: setting local description');
 
@@ -1876,6 +1883,8 @@ export default class JingleSessionPC extends JingleSession {
         const workFunction = finishedCallback => {
             const oldLocalSdp = this.peerconnection.localDescription.sdp;
 
+            /* We should disable this code part. If it is enabled, primary caches are deleted due to calling clearRecvonlySsrc while stopping screenshare (aka desktop track)
+              TODO: We do not need RECVONLY for now. We may need later. We may check if it is desktop track.
             if (browser.usesPlanB()) {
                 // NOTE the code below assumes that no more than 1 video track
                 // can be added to the peer connection.
@@ -1910,6 +1919,7 @@ export default class JingleSessionPC extends JingleSession {
                     this.peerconnection.generateRecvonlySsrc();
                 }
             }
+            */
 
             this.peerconnection.replaceTrack(oldTrack, newTrack)
                 .then(shouldRenegotiate => {
@@ -1918,7 +1928,9 @@ export default class JingleSessionPC extends JingleSession {
                     if (shouldRenegotiate
                         && (oldTrack || newTrack)
                         && this.state === JingleSessionState.ACTIVE) {
-                        promise = this._renegotiate().then(() => {
+
+                        promise = this._renegotiate(this.peerconnection.remoteDescription.sdp, newTrack ? newTrack.getTrack().id : undefined).then(() => {
+
                             const newLocalSDP = new SDP(this.peerconnection.localDescription.sdp);
 
                             this.notifyMySSRCUpdate(new SDP(oldLocalSdp), newLocalSDP);
@@ -2134,13 +2146,13 @@ export default class JingleSessionPC extends JingleSession {
             operationPromise
                 .then(shouldRenegotiate => {
                     if (shouldRenegotiate && oldLocalSDP && tpc.remoteDescription.sdp) {
-                        this._renegotiate()
+
+                        this._renegotiate(tpc.remoteDescription.sdp, track.getTrack().id)
                             .then(() => {
                                 // The results are ignored, as this check failure is not
                                 // enough to fail the whole operation. It will log
                                 // an error inside.
-                                this._verifyNoSSRCChanged(
-                                    operationName, new SDP(oldLocalSDP));
+                                this._verifyNoSSRCChanged(operationName, new SDP(oldLocalSDP));
                                 finishedCallback();
                             });
                     } else {

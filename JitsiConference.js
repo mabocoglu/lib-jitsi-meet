@@ -862,6 +862,22 @@ JitsiConference.prototype.sendCommand = function(name, values) {
 };
 
 /**
+ * Send presence command. This method uses addToPresence2 which keeps the previous key from the presence map.
+ * We will use this method for videoType message
+ * @param name {String} the name of the command.
+ * @param values {Object} with keys and values that will be sent.
+ **/
+ JitsiConference.prototype.sendCommand2 = function(name, values) {
+    if (this.room) {
+        this.room.addToPresence2(name, values);
+        this.room.sendPresence();
+    } else {
+        logger.warn('Not sending a command, room not initialized.');
+    }
+
+};
+
+/**
  * Send presence command one time.
  * @param name {String} the name of the command.
  * @param values {Object} with keys and values that will be sent.
@@ -948,21 +964,20 @@ JitsiConference.prototype.getTranscriptionStatus = function() {
  * another video track in the conference.
  */
 JitsiConference.prototype.addTrack = function(track) {
-    if (track.isVideoTrack()) {
-        // Ensure there's exactly 1 local video track in the conference.
-        const localVideoTrack = this.rtc.getLocalVideoTrack();
 
-        if (localVideoTrack) {
-            // Don't be excessively harsh and severe if the API client happens
-            // to attempt to add the same local video track twice.
-            if (track === localVideoTrack) {
-                return Promise.resolve(track);
-            }
+    const mediaType = track.getType();
+    const videoType = track.videoType;
+    const localTracks = this.rtc.getLocalTracks2(mediaType, videoType);
 
-            return Promise.reject(new Error(
-                'cannot add second video track to the conference'));
-
+    // Ensure there's exactly 1 local track of each media type in the conference.
+    if (localTracks.length > 0) {
+        // Don't be excessively harsh and severe if the API client happens
+        // to attempt to add the same local track twice.
+        if (track === localTracks[0]) { // we check only first video track. The second one would be desktop track!
+            return Promise.resolve(track);
         }
+
+        return Promise.reject(new Error(`Cannot add second ${mediaType} track to the conference`));
     }
 
     return this.replaceTrack(null, track);
@@ -1138,10 +1153,18 @@ JitsiConference.prototype._setupNewTrack = function(newTrack) {
                 RTC.getEventDataForActiveDevice(device));
         }
     }
+
+    // we do not change videoType here, we are sending a new videoType on each action such as adding camera track or desktop track.
+    // we do not want a screenshare action replace the camera track video type. so we use another command method which keeps the previous videoType keys
     if (newTrack.isVideoTrack()) {
-        this.removeCommand('videoType');
-        this.sendCommand('videoType', {
-            value: newTrack.videoType,
+        const videoTypeValue = newTrack.stream
+                                ? newTrack.stream.id + ":" + newTrack.videoType
+                                : newTrack.videoType;
+
+        // this.removeCommand('videoType'); // TODO: we do not need
+        // FIXME: every screenshare action add another videoType key in presence map as drawback.we should consider to cleanup!
+        this.sendCommand2('videoType', { // we use different send command method. this one keeps the previos key unlike sendCommand does
+            value: videoTypeValue,
             attributes: {
                 xmlns: 'http://jitsi.org/jitmeet/video'
             }
@@ -1152,8 +1175,8 @@ JitsiConference.prototype._setupNewTrack = function(newTrack) {
     // ensure that we're sharing proper "is muted" state
     if (newTrack.isAudioTrack()) {
         this.room.setAudioMute(newTrack.isMuted());
-    } else {
-        this.room.setVideoMute(newTrack.isMuted());
+    } else if (newTrack.videoType !== 'desktop') { // mute event should be use only for camera track, not desktop track. there is no option for muting desktop stream in conference.
+        this.room.setVideoMute(newTrack.stream.id, newTrack.isMuted());
     }
 
     newTrack.muteHandler = this._fireMuteChangeEvent.bind(this, newTrack);
@@ -1806,6 +1829,11 @@ JitsiConference.prototype.onRemoteTrackRemoved = function(removedTrack) {
                 this.eventEmitter.emit(
                     JitsiConferenceEvents.TRACK_REMOVED, removedTrack);
 
+                    // if remove track is a desktop track. we should remove from the page
+                    if (removedTrack.videoType === 'desktop') {
+                        this.eventEmitter.emit(JitsiConferenceEvents.USER_STOPPED_SCREEN_SHARING, participant._id, participant);
+                    }
+
                 if (this.transcriber) {
                     this.transcriber.removeTrack(removedTrack);
                 }
@@ -2296,7 +2324,7 @@ JitsiConference.prototype.getMeetingUniqueId = function() {
  * <tt>TraceablePeerConnection</tt> currently available.
  * @public (FIXME how to make package local ?)
  */
-JitsiConference.prototype.getActivePeerConnection = function() {
+ JitsiConference.prototype.getActivePeerConnection = function() {
     if (this.isP2PActive()) {
         return this.p2pJingleSession.peerconnection;
     }

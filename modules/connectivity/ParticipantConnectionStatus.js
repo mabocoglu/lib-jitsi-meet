@@ -91,6 +91,8 @@ export default class ParticipantConnectionStatusHandler {
      * been outside of last N too long to be considered
      * {@link ParticipantConnectionStatus.RESTORING}.
      * @param {boolean} isVideoMuted true if the user is video muted and we
+     * should not expect to receive any video if there is no video desktop
+     * @param {boolean} isVideoDesktopMuted true if the user is video desktop muted and we
      * should not expect to receive any video.
      * @param {boolean} isVideoTrackFrozen if the current browser support video
      * frozen detection then it will be set to true when the video track is
@@ -105,6 +107,7 @@ export default class ParticipantConnectionStatusHandler {
             isInLastN,
             isRestoringTimedout,
             isVideoMuted,
+            isVideoDesktopMuted,
             isVideoTrackFrozen) {
         if (!isConnectionActiveByJvb) {
             // when there is a connection problem signaled from jvb
@@ -120,7 +123,7 @@ export default class ParticipantConnectionStatusHandler {
 
         // Logic when isVideoTrackFrozen is supported
         if (browser.supportsVideoMuteOnConnInterrupted()) {
-            if (!isVideoTrackFrozen) {
+            if (!isVideoTrackFrozen || !isVideoDesktopMuted) { // we do not want connection status become RESTORING while there is a desktop track
                 // If the video is playing we're good
                 return ParticipantConnectionStatus.ACTIVE;
             } else if (isInLastN) {
@@ -436,8 +439,9 @@ export default class ParticipantConnectionStatusHandler {
      * Changes connection status.
      * @param {JitsiParticipant} participant
      * @param newStatus
+     * @param videoType
      */
-    _changeConnectionStatus(participant, newStatus) {
+    _changeConnectionStatus(participant, newStatus, videoType) {
         if (participant.getConnectionStatus() !== newStatus) {
 
             const endpointId = participant.getId();
@@ -459,7 +463,7 @@ export default class ParticipantConnectionStatusHandler {
 
             this.conference.eventEmitter.emit(
                 JitsiConferenceEvents.PARTICIPANT_CONN_STATUS_CHANGED,
-                endpointId, newStatus);
+                endpointId, newStatus, videoType);
         }
     }
 
@@ -518,7 +522,7 @@ export default class ParticipantConnectionStatusHandler {
      * @param {JitsiRemoteTrack} remoteTrack - The remote track which is being
      * removed from the conference.
      */
-    onRemoteTrackRemoved(remoteTrack) {
+    onRemoteTrackRemoved(remoteTrack) {       
         if (!remoteTrack.isLocal()
                 && remoteTrack.getType() === MediaType.VIDEO) {
 
@@ -583,8 +587,9 @@ export default class ParticipantConnectionStatusHandler {
      * the participant identified by the given id.
      *
      * @param {string} id - The participant's id (MUC nickname or Colibri endpoint ID).
+     * @param {string} videoType - The participant's video type which the connection status will be checked for.
      */
-    figureOutConnectionStatus(id) {
+    figureOutConnectionStatus(id, videoType) {
         const participant = this.conference.getParticipantById(id);
 
         if (!participant) {
@@ -604,8 +609,9 @@ export default class ParticipantConnectionStatusHandler {
 
         // NOTE Overriding videoMuted to true for audioOnlyMode should disable
         // any detection based on video playback or the last N.
-        const isVideoMuted = participant.isVideoMuted() || audioOnlyMode;
-        const isVideoTrackFrozen = this.isVideoTrackFrozen(participant);
+        const isVideoMuted = participant.isVideoMuted() || audioOnlyMode; // video muted check is done only for camera (VIDEO_TYPE.CAMERA)
+        const isVideoDesktopMuted = participant.isVideoDesktopMuted() || audioOnlyMode;
+        const isVideoTrackFrozen = this.isVideoTrackFrozen(participant); // TODO: check here while camera is muted and desktop track is not.
         const isInLastN = this.rtc.isInLastN(id);
         let isConnActiveByJvb = this.connStatusFromJvb[id];
 
@@ -626,6 +632,7 @@ export default class ParticipantConnectionStatusHandler {
                     isInLastN,
                     isRestoringTimedOut,
                     isVideoMuted,
+                    isVideoDesktopMuted,
                     isVideoTrackFrozen);
 
         // if the new state is not restoring clear timers and timestamps
@@ -665,6 +672,7 @@ export default class ParticipantConnectionStatusHandler {
 
             // sometimes (always?) we're late to hook the TRACK_VIDEOTYPE_CHANGED event and the
             // video type is not in oldConnectionStatus.
+            // TODO: I should check for double video track.
             if (!('videoType' in this.connectionStatusMap[id])) {
                 const videoTracks = participant.getTracksByMediaType(MediaType.VIDEO);
 
@@ -673,7 +681,7 @@ export default class ParticipantConnectionStatusHandler {
                 }
             }
         }
-        this._changeConnectionStatus(participant, newState);
+        this._changeConnectionStatus(participant, newState, videoType);
     }
 
     /**
@@ -819,7 +827,7 @@ export default class ParticipantConnectionStatusHandler {
                     `Set RTC mute timeout for: ${participantId}\
                      of ${timeout} ms`);
                 this.clearTimeout(participantId);
-                this.figureOutConnectionStatus(participantId);
+                this.figureOutConnectionStatus(participantId, track.videoType);
             }, timeout);
         }
     }
@@ -839,7 +847,7 @@ export default class ParticipantConnectionStatusHandler {
         this.clearTimeout(participantId);
         this.clearRtcMutedTimestamp(participantId);
 
-        this.figureOutConnectionStatus(participantId);
+        this.figureOutConnectionStatus(participantId, track.videoType);
     }
 
     /**
@@ -855,7 +863,7 @@ export default class ParticipantConnectionStatusHandler {
             `Detector on track signalling mute changed: ${participantId}`,
             track.isMuted());
 
-        this.figureOutConnectionStatus(participantId);
+        this.figureOutConnectionStatus(participantId, track.videoType);
     }
 
     /**

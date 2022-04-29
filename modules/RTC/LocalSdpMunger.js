@@ -1,6 +1,7 @@
 /* global __filename */
 
 import { getLogger } from 'jitsi-meet-logger';
+import * as VideoType from '../../service//RTC/VideoType';
 
 import * as MediaType from '../../service/RTC/MediaType';
 import { SdpTransformWrap } from '../xmpp/SdpTransformUtil';
@@ -41,15 +42,16 @@ export default class LocalSdpMunger {
      * the SDP wrapped by <tt>transformer</tt>.
      * @private
      */
-    _addMutedLocalVideoTracksToSDP(transformer) {
+    _addMutedLocalVideoTracksToSDP(transformer) { // what happen if we do not use?
         // Go over each video tracks and check if the SDP has to be changed
-        const localVideos = this.tpc.getLocalTracks(MediaType.VIDEO);
+
+        const localVideos = this.tpc.getLocalTracks2(MediaType.VIDEO, VideoType.CAMERA); // mute control only for camera
 
         if (!localVideos.length) {
             return false;
-        } else if (localVideos.length !== 1) {
+        } else if (localVideos.length > 2) { // we can add desktop video track. but we don't get from getLocalTracks2. so do we need to check the size here?
             logger.error(
-                `${this.tpc} there is more than 1 video track ! `
+                `${this.tpc} there is more than 2 video track ! `
                     + 'Strange things may happen !', localVideos);
         }
 
@@ -82,6 +84,7 @@ export default class LocalSdpMunger {
                     isInPeerConnection} => should fake sdp ? : ${
                     shouldFakeSdp}`);
 
+            // TODO: we may change state to  recv-only
             if (!shouldFakeSdp) {
                 continue; // eslint-disable-line no-continue
             }
@@ -134,6 +137,9 @@ export default class LocalSdpMunger {
                     attribute: 'msid',
                     value: videoTrack.storedMSID
                 });
+
+                if (!videoTrack.storedMSID)
+                    logger.error("Error on getting msid. There is no stored msid"); // TODO: should we throw error or log?
             }
             if (requiredSSRCs.length > 1) {
                 const group = {

@@ -54,11 +54,13 @@ function updateAssociatedRtxStream(mLine, primarySsrcInfo, rtxSsrc) {
         attribute: 'cname',
         value: primarySsrcCname
     });
-    mLine.addSSRCAttribute({
-        id: rtxSsrc,
-        attribute: 'msid',
-        value: primarySsrcMsid
-    });
+    if (primarySsrcMsid) {
+        mLine.addSSRCAttribute({
+            id: rtxSsrc,
+            attribute: 'msid',
+            value: primarySsrcMsid
+        });
+    }
     mLine.addSSRCGroup({
         semantics: 'FID',
         ssrcs: `${primarySsrc} ${rtxSsrc}`

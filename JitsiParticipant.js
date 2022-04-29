@@ -8,6 +8,7 @@ import { ParticipantConnectionStatus }
     from './modules/connectivity/ParticipantConnectionStatus';
 import { ERROR_FEATURE_VERSION_MISMATCH } from './modules/xmpp/Caps';
 import * as MediaType from './service/RTC/MediaType';
+import * as VideoType from './service/RTC/VideoType';
 
 const logger = getLogger(__filename);
 
@@ -139,6 +140,16 @@ export default class JitsiParticipant {
     }
 
     /**
+     * @param {MediaType} mediaType
+     * @param {VideoType} videoType
+     * @returns {Array.<JitsiTrack>} an array of media tracks for this
+     * participant, for given media type.
+     */
+     getTracksByMediaTypeAndVideoType(mediaType, videoType) {
+        return this.getTracks().filter(track => track.getType() === mediaType && track.videoType === videoType);
+    }
+
+    /**
      * @returns {String} The ID of this participant.
      */
     getId() {
@@ -207,19 +218,31 @@ export default class JitsiParticipant {
      * mediaType and which belong to this JitsiParticipant are muted; otherwise,
      * false.
      */
-    _isMediaTypeMuted(mediaType) {
-        return this.getTracks().reduce(
-            (muted, track) =>
-                muted && (track.getType() !== mediaType || track.isMuted()),
-            true);
+    _isMediaTypeMuted(mediaType, videoType) { // TODO: We should think about desktop track seperately
+        
+        const tracks = videoType ? this.getTracksByMediaTypeAndVideoType(mediaType, videoType) : this.getTracksByMediaType(mediaType);
+
+        if (tracks.length > 0) {
+            return tracks[0].isMuted();
+        } else {
+            logger.warn(`For media type ${mediaType}, no track is found!`); // Should we use or just ignore it?
+        }
     }
 
     /**
+     * Works for only camera track. We do not use mute action for desktop tracks.
      * @returns {Boolean} Whether this participant has muted their video.
      */
     isVideoMuted() {
-        return this._isMediaTypeMuted(MediaType.VIDEO);
+        return this._isMediaTypeMuted(MediaType.VIDEO, VideoType.CAMERA);
     }
+
+    /**
+     * @returns {Boolean} Whether this participant has muted their video desktop.
+     */
+     isVideoDesktopMuted() {
+        return this._isMediaTypeMuted(MediaType.VIDEO, VideoType.DESKTOP);
+     }
 
     /**
      * @returns {String} The role of this participant.

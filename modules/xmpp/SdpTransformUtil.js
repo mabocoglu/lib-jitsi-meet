@@ -222,12 +222,78 @@ class MLineWrap {
         return this.mLine.ssrcGroups !== undefined;
     }
 
+    findSsrcsForDesktopMsid(desktopMsid) {
+        let desktopSsrcs = [];
+
+        for (const ssrc of this.mLine.ssrcs) {
+            if (ssrc.attribute === "msid" && ssrc.value === desktopMsid) {
+                desktopSsrcs.push(ssrc.id);
+            }
+        }
+
+        return desktopSsrcs;
+    }
+
     /**
      * Finds the primary video SSRC.
      * @returns {number|undefined} the primary video ssrc
      * @throws Error if the underlying media description is not a video
      */
-    getPrimaryVideoSsrc() {
+    getPrimaryVideoSsrc(desktopMsid) {
+        const mediaType = this.mLine.type;
+
+        if (mediaType !== 'video') {
+            throw new Error(
+                `getPrimarySsrc doesn't work with '${mediaType}'`);
+        }
+
+        const numSsrcs = _getSSRCCount(this.mLine);
+
+        const desktopSsrcList = this.findSsrcsForDesktopMsid(desktopMsid);
+
+        if (numSsrcs === 1) {
+            // Not using "ssrcs" getter on purpose here
+
+            return desktopSsrcList.includes(this.mLine.ssrcs[0].id) ? undefined : this.mLine.ssrcs[0].id;
+        }
+
+        // Look for a SIM, FID, or FEC-FR group
+        if (this.mLine.ssrcGroups) {
+
+            const simGroup = this.findGroup('SIM');
+
+            if (simGroup) {
+                const primarySsrcSim =  parsePrimarySSRC(simGroup);
+                if (!desktopSsrcList.includes(primarySsrcSim))
+                    return primarySsrcSim;
+            }
+            const fidGroups = this.findGroups('FID');
+
+            for (let fidGroup of fidGroups) {
+                const primarySsrcFid =  parsePrimarySSRC(fidGroup);
+                if (!desktopSsrcList.includes(primarySsrcFid))
+                    return primarySsrcFid;
+            }
+
+            const fecGroup = this.findGroup('FEC-FR');
+
+            if (fecGroup) {
+                const primarySsrcFec =  parsePrimarySSRC(fecGroup);
+                if (!desktopSsrcList.includes(primarySsrcFec))
+                    return primarySsrcFec;
+            }
+
+            return undefined;
+        }
+
+    }
+
+    /**
+     * Finds the primary video SSRC.
+     * @returns {number|undefined} the primary video ssrc
+     * @throws Error if the underlying media description is not a video
+     */
+    getVideoSsrcByVideoType(videoType) {
         const mediaType = this.mLine.type;
 
         if (mediaType !== 'video') {
@@ -416,9 +482,54 @@ export class SdpTransformWrap {
      * the underlying SDP state held by this <tt>SdpTransformWrap</tt> instance
      * (it's not a copy).
      */
-    selectMedia(mediaType) {
+     selectMedia(mediaType) {
         const selectedMLine
             = this.parsedSDP.media.find(mLine => mLine.type === mediaType);
+
+        return selectedMLine ? new MLineWrap(selectedMLine) : null;
+    }
+
+    selectNonDesktopMedia(mediaType, desktopMsid) {
+        const selectedMLine = this.parsedSDP.media.find(mLine => {
+
+                if (mLine.type === mediaType) {
+
+                    // SSRC object
+                    const ssrc = new MLineWrap(mLine).findSSRCByMSID(desktopMsid);
+
+                    if (ssrc) {
+                        return false;
+                    } else {
+                        return true; // we found non desktop msid
+                    }
+                }
+
+                return false;
+            });
+
+        return selectedMLine ? new MLineWrap(selectedMLine) : null;
+    }
+
+    /**
+     * Selects the first media SDP of given name.
+     * @param {string} mediaType the name of the media e.g. 'audio', 'video',
+     * 'data'.
+     * @return {MLineWrap|null} return {@link MLineWrap} instance for the media
+     * line or <tt>null</tt> if not found. The object returned references
+     * the underlying SDP state held by this <tt>SdpTransformWrap</tt> instance
+     * (it's not a copy).
+     */
+    selectMediaByMsId(mediaType, msId) { // we will find ssrc in sdp with msId coming from storedMsId
+        const selectedMLine
+            = this.parsedSDP.media.find(mLine => {
+
+            if (mLine.type === mediaType) {
+                if (new MLineWrap(mLine).findSSRCByMSID(msId))
+                    return true;
+            }
+
+            return false;
+        });
 
         return selectedMLine ? new MLineWrap(selectedMLine) : null;
     }

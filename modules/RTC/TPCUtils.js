@@ -26,7 +26,7 @@ export class TPCUtils {
      */
     constructor(peerconnection, videoBitrates) {
         this.pc = peerconnection;
-        this.videoBitrates = videoBitrates;
+        this.videoBitrates = videoBitrates.VP8 || videoBitrates;
 
         /**
          * The startup configuration for the stream encodings that are applicable to
@@ -231,7 +231,11 @@ export class TPCUtils {
         // The assumption here is that the first transceiver of the specified
         // media type is that of the local track.
         const transceiver = this.pc.peerconnection.getTransceivers()
-            .find(t => t.receiver && t.receiver.track && t.receiver.track.kind === mediaType);
+            .find(t => {
+                const result = t.receiver && t.receiver.track && t.receiver.track.kind === mediaType
+                return result;
+            }
+            );
 
         if (!transceiver) {
             return Promise.reject(new Error(`RTCRtpTransceiver for ${mediaType} not found`));
@@ -248,13 +252,21 @@ export class TPCUtils {
 
                 return this.setEncodings(localTrack).then(() => {
                     this.pc.localTracks.set(localTrack.rtcId, localTrack);
-                    transceiver.direction = 'sendrecv';
                 });
             }
 
             return Promise.resolve();
-        }
+        } else if (localTrack.videoType === 'camera') {
+            const stream = localTrack.getOriginalStream();
 
+            if (stream) {
+                this.pc.peerconnection.addStream(localTrack.getOriginalStream());
+
+                return this.setEncodings(localTrack).then(() => {
+                    this.pc.localTracks.set(localTrack.rtcId, localTrack);
+                });
+            }
+        }
         return transceiver.sender.replaceTrack(track);
     }
 
@@ -433,5 +445,35 @@ export class TPCUtils {
     */
     setVideoTransferActive(active) {
         this.setMediaTransferActive(MediaType.VIDEO, active);
+    }
+
+    /*
+    fix(TPC): do not update encodings for simulcast desktop tracks.
+
+    Fixes jitsi/jitsi-meet#8094.
+    */
+
+    /**
+     * Ensures that the resolution of the stream encodings are consistent with the values
+     * that were configured on the RTCRtpSender when the source was added to the peerconnection.
+     * This should prevent us from overriding the default values if the browser returns
+     * erroneous values when RTCRtpSender.getParameters is used for getting the encodings info.
+     * @param {Object} parameters - the RTCRtpEncodingParameters obtained from the browser.
+     * @returns {void}
+     */
+     updateEncodingsResolution(parameters) {
+        if (!(browser.isSafari() && parameters.encodings && Array.isArray(parameters.encodings))) {
+            return;
+        }
+        const allEqualEncodings
+            = encodings => encodings.every(encoding => typeof encoding.scaleResolutionDownBy !== 'undefined'
+                && encoding.scaleResolutionDownBy === encodings[0].scaleResolutionDownBy);
+
+        // Implement the workaround only when all the encodings report the same resolution.
+        if (allEqualEncodings(parameters.encodings)) {
+            parameters.encodings.forEach((encoding, idx) => {
+                encoding.scaleResolutionDownBy = this.localStreamEncodingsConfig[idx].scaleResolutionDownBy;
+            });
+        }
     }
 }

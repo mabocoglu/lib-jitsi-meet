@@ -611,6 +611,16 @@ export default class RTC extends Listenable {
     }
 
     /**
+     * Get local video tracks. We need to get desktop track.
+     * @returns {Array<JitsiLocalTrack>|undefined}
+     */
+    getLocalVideoTracks() {
+        const localVideo = this.getLocalTracks(MediaType.VIDEO);
+
+        return localVideo.length ? localVideo : undefined;
+    }
+
+    /**
      * Get local audio track.
      * @returns {JitsiLocalTrack|undefined}
      */
@@ -636,6 +646,25 @@ export default class RTC extends Listenable {
         }
 
         return tracks;
+    }
+
+    /**
+     * Returns the local tracks of the given media type, or all local tracks if
+     * no specific type is given.
+     * @param {MediaType} [mediaType] Optional media type filter.
+     * @param {VideoType} [videoType] Optional video type filter.
+     * (audio or video).
+     */
+    getLocalTracks2(mediaType, videoType) {
+        let tracks = this.localTracks.slice();
+
+        if (mediaType !== undefined && videoType !== undefined) {
+            return tracks.filter(track => track.getType() === mediaType && track.videoType === videoType);
+        } else if (mediaType !== undefined) {
+            return tracks.filter( track => track.getType() === mediaType);
+        } else {
+            return tracks;
+        }
     }
 
     /**

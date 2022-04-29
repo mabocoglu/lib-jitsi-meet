@@ -67,22 +67,15 @@ export default class SignalingLayerImpl extends SignalingLayer {
                     from, MediaType.VIDEO, node.value === 'true');
             };
             room.addPresenceListener('videomuted', this._videoMuteHandler);
-
-            this._videoTypeHandler = (node, from) => {
-                this.eventEmitter.emit(
-                    SignalingEvents.PEER_VIDEO_TYPE_CHANGED,
-                    from, node.value);
-            };
-            room.addPresenceListener('videoType', this._videoTypeHandler);
         }
     }
 
     /**
      * @inheritDoc
      */
-    getPeerMediaInfo(owner, mediaType) {
+    getPeerMediaInfo(owner, mediaType, mediaStreamId) {
         if (this.chatRoom) {
-            return this.chatRoom.getMediaPresenceInfo(owner, mediaType);
+            return this.chatRoom.getMediaPresenceInfo(owner, mediaType, mediaStreamId);
         }
         logger.error('Requested peer media info, before room was set');
     }

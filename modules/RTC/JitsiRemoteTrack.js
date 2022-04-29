@@ -198,9 +198,10 @@ export default class JitsiRemoteTrack extends JitsiTrack {
     _setVideoType(type) {
         if (this.videoType === type) {
             return;
-        }
+        } 
         this.videoType = type;
-        this.emit(JitsiTrackEvents.TRACK_VIDEOTYPE_CHANGED, type);
+        // TODO: We do not use due to prevent changing our remote track when a screenshare event occurs. We may check
+        // this.emit(JitsiTrackEvents.TRACK_VIDEOTYPE_CHANGED, type);
     }
 
     /**

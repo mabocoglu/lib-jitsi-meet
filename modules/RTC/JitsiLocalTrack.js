@@ -526,7 +526,7 @@ export default class JitsiLocalTrack extends JitsiTrack {
                         // containers to something
                         // We don't want any events to be fired on this stream
                         this._unregisterHandlers();
-                        this.stopStream();
+                        this.stopStream(); // will run on successCallback. Attached to the page on the remote side already.
                         this._setStream(null);
                         resolve();
                     },
@@ -658,10 +658,12 @@ export default class JitsiLocalTrack extends JitsiTrack {
         }
 
         return new Promise(resolve => {
-            this.conference.room[
-                this.isAudioTrack()
-                    ? 'setAudioMute'
-                    : 'setVideoMute'](mute, resolve);
+            // I wanted to use videomuted:streamid:true rather than videomuted:true, but definition on jitsi-xmpp-extensions prevents me :(
+            if (this.isAudioTrack()) {
+                this.conference.room['setAudioMute'](mute, resolve);
+            } else {
+                this.conference.room['setVideoMute'](this.stream ? this.stream.id : undefined, mute, resolve);
+            }
         });
     }
 
